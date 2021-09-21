@@ -1,9 +1,9 @@
 package com.finance.loader.webclient;
 
+import com.finance.loader.props.IEXPropsHolder;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
-import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -14,7 +14,6 @@ import reactor.netty.resources.ConnectionProvider;
 
 import javax.annotation.PostConstruct;
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
@@ -22,6 +21,11 @@ import java.util.concurrent.TimeUnit;
 public class FinanceLoaderWebClient {
 
     private WebClient preparedClient;
+    private final IEXPropsHolder tokenHolder;
+
+    public FinanceLoaderWebClient(IEXPropsHolder tokenHolder) {
+        this.tokenHolder = tokenHolder;
+    }
 
     @PostConstruct
     public void init() {
@@ -52,9 +56,9 @@ public class FinanceLoaderWebClient {
     private WebClient createWebClient() {
         return WebClient.builder()
                 .clientConnector(new ReactorClientHttpConnector(createHttpClient()))
-                .baseUrl("https://sandbox.iexapis.com")
+                .baseUrl(tokenHolder.getBaseResource())
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .defaultUriVariables(Collections.singletonMap("url", "https://sandbox.iexapis.com"))
+                .defaultUriVariables(Collections.singletonMap("url", tokenHolder.getBaseResource()))
                 .build();
     }
 

@@ -1,11 +1,13 @@
 
 package com.finance.loader.executor;
 
+import com.finance.loader.dto.Notification;
 import com.finance.loader.exceptions.TooManyRequestsException;
 import com.finance.loader.model.Institution;
 import com.finance.loader.model.StockInfoShortened;
-import com.finance.loader.props.IEXTokenHolder;
+import com.finance.loader.props.IEXPropsHolder;
 import com.finance.loader.repo.InstitutionRepository;
+import com.finance.loader.tasks.NotificationPublisher;
 import com.finance.loader.webclient.FinanceLoaderWebClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +22,7 @@ import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.List;
@@ -31,26 +34,33 @@ public class FinanceTasksExecutor {
 
     private final Logger logger = LoggerFactory.getLogger(FinanceTasksExecutor.class.getName());
     private final FinanceLoaderWebClient webClient;
-    private final IEXTokenHolder tokenHolder;
+    private final IEXPropsHolder propsHolder;
     private final InstitutionRepository institutionRepository;
+    private final NotificationPublisher publisher;
 
-    public FinanceTasksExecutor(FinanceLoaderWebClient webClient, IEXTokenHolder tokenHolder, InstitutionRepository institutionRepository) {
+    public FinanceTasksExecutor(FinanceLoaderWebClient webClient, IEXPropsHolder propsHolder, InstitutionRepository institutionRepository, NotificationPublisher publisher) {
         this.webClient = webClient;
-        this.tokenHolder = tokenHolder;
+        this.propsHolder = propsHolder;
         this.institutionRepository = institutionRepository;
+        this.publisher = publisher;
     }
 
     public void start() {
+        logger.info("Institution's information processing...");
         List<Institution> institutions = getGlobalFinancesInfo();
-        institutions = institutions.subList(0, 100);
-        institutionRepository.saveAll(fetchCompaniesStockInfo(institutions)).doOnComplete(this::start).subscribe();
+        institutions = institutions.subList(0, 50);
+        institutionRepository.saveAll(fetchCompaniesStockInfo(institutions)).doOnComplete(this::start).map(institution -> new Notification(
+                Notification.NoticeStatus.COMPLETED,
+                Notification.NoticeType.INFO,
+                LocalDate.now(),
+                LocalDate.now())).collectList().subscribe(notifications -> publisher.sendMany(notifications, "info"));
     }
 
     private List<Institution> getGlobalFinancesInfo() {
         logger.debug("REST request to get all institutions.");
         WebClient.ResponseSpec responseSpec = webClient.getPreparedClient().get().uri(uriBuilder -> uriBuilder
                         .pathSegment("/stable/ref-data/symbols")
-                        .queryParam("token", tokenHolder.getApiToken()).build())
+                        .queryParam("token", propsHolder.getApiToken()).build())
                 .retrieve();
         List<Institution> institutions = responseSpec.bodyToFlux(Institution.class).collectList().block();
         if (institutions != null) {
@@ -65,7 +75,7 @@ public class FinanceTasksExecutor {
         return webClient.getPreparedClient().get()
                 .uri(uriBuilder -> uriBuilder
                         .pathSegment("/stable/stock/".concat(stock.concat("/quote")))
-                        .queryParam("token", tokenHolder.getApiToken())
+                        .queryParam("token", propsHolder.getApiToken())
                         .build());
     }
 
@@ -82,12 +92,18 @@ public class FinanceTasksExecutor {
                         })
                         .retryWhen(Retry.backoff(5, Duration.of(1000, ChronoUnit.MILLIS))
                                 .filter(error -> error instanceof WebClientResponseException.TooManyRequests || error instanceof WebClientRequestException)
-                                .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> new TooManyRequestsException(retrySignal.failure().getMessage())))
+                                .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
+                                    publisher.send(new Notification(
+                                            Notification.NoticeStatus.NEW,
+                                            Notification.NoticeType.ERROR,
+                                            LocalDate.now(),
+                                            LocalDate.now()), "error");
+                                    return new TooManyRequestsException(retrySignal.failure().getMessage());
+                                }))
                         .map(stockInfoShortened -> {
-                            if (institution.getStockHistory() == null)
-                                institution.setStockHistory(Collections.singletonList(stockInfoShortened));
-                            else
-                                institution.getStockHistory().add(stockInfoShortened);
+                            Optional.ofNullable(institution.getStockHistory()).ifPresentOrElse(
+                                    (history) -> history.add(stockInfoShortened),
+                                    () -> institution.setStockHistory(Collections.singletonList(stockInfoShortened)));
                             return institution;
                         });
     }
@@ -123,67 +139,7 @@ public class FinanceTasksExecutor {
                 .parallel()
                 .runOn(Schedulers.boundedElastic())
                 .flatMap(this::downloadStockInfo)
-                .ordered((o1, o2) -> o1.getLastStockInfo().getVolume() > o2.getLastStockInfo().getVolume() ? 1 : 0);
+                .ordered((o1, o2) -> (o1.getLastStockInfo().getVolume() != null ? o1.getLastStockInfo().getVolume() : 0)
+                        > (o2.getLastStockInfo().getVolume() != null ? o2.getLastStockInfo().getVolume() : -1) ? 1 : 0);
     }
-
-    /*private boolean processInstitutionsImproved(List<Institution> institutions) {
-        AtomicInteger integer = new AtomicInteger();
-        integer.set(0);
-        List<CompletableFuture<Disposable>> tasks = institutions
-                .stream().filter(Institution::isEnabled)
-                .map((institution) -> {
-                    integer.set(integer.get() + 500);
-                    if (integer.get() >= 1000)
-                        integer.set(0);
-                    return CompletableFuture.supplyAsync(() ->
-                                    downloadStockInfo(institution),
-                            CompletableFuture.delayedExecutor(integer.longValue(), TimeUnit.MILLISECONDS, executorService));
-                })
-                .collect(Collectors.toList());
-        CompletableFuture.allOf(tasks.toArray(CompletableFuture[]::new)).join();
-        return true;
-    }
-
-    public void execProcessing(List<Institution> institutions) {
-        List<CompletableFuture<Boolean>> outerTasks = new ArrayList<>();
-        final int ENTITIES_PER_REQUEST = 50;
-        int timeout = 0;
-        for (int i = 1; i < (institutions.size() / ENTITIES_PER_REQUEST); i++) {
-            int finalI = i * ENTITIES_PER_REQUEST;
-            timeout+=5;
-            if (timeout >= 25)
-                timeout = 0;
-            if (finalI < institutions.size()) {
-                if (i == 1) {
-                    outerTasks.add(CompletableFuture.supplyAsync(() ->
-                                    processInstitutionsImproved(institutions.subList(0, ENTITIES_PER_REQUEST)),
-                            CompletableFuture.delayedExecutor(0, TimeUnit.SECONDS, Executors.newFixedThreadPool(1)) ));
-                } else {
-                    outerTasks.add(CompletableFuture.supplyAsync(() ->
-                                    processInstitutionsImproved(institutions.subList(finalI, finalI + ENTITIES_PER_REQUEST)),
-                            CompletableFuture.delayedExecutor(timeout, TimeUnit.SECONDS, Executors.newFixedThreadPool(1))));
-                }
-            } else {
-                logger.error("Out of bounds" + finalI);
-            }
-        }
-
-        CompletableFuture<Void> tasks = CompletableFuture.allOf(outerTasks.toArray(CompletableFuture[]::new));
-        tasks.thenRun(this::start);
-        shutdownExecutorService();
-    }*/
-
-    /*private void shutdownExecutorService() {
-        executorService.shutdown();
-        logger.info("ES stopped accepting new tasks...");
-        try {
-            if (executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS)) {
-                executorService.shutdownNow();
-                logger.info("ES was disabled successfully.");
-            }
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-            logger.warn("Nested threads were interrupted. ES stopped.");
-        }
-    }*/
 }
