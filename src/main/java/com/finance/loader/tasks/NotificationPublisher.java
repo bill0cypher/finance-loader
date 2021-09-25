@@ -17,11 +17,11 @@ public class NotificationPublisher {
         this.queueMessagingTemplate = queueMessagingTemplate;
     }
 
-    public void send(Notification message, String subject) {
+    public void send(Notification message) {
         queueMessagingTemplate.convertAndSend(message);
     }
 
-    public void sendMany(List<Notification> messages, String subject) {
+    public void sendMany(List<Notification> messages) {
         queueMessagingTemplate.convertAndSend(messages);
     }
 }

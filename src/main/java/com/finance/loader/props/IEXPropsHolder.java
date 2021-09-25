@@ -17,6 +17,10 @@ public class IEXPropsHolder {
         this.apiToken = apiToken;
     }
 
+    public void setBaseResource(String baseResource) {
+        this.baseResource = baseResource;
+    }
+
     public String getBaseResource() {
         return baseResource;
     }

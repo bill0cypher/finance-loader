@@ -38,7 +38,7 @@ public class AWSSQSComponent {
     @Bean
     public QueueMessagingTemplate queueMessagingTemplate(AmazonSQSAsync sqsAsync) {
         QueueMessagingTemplate messagingTemplate = new QueueMessagingTemplate(sqsClient());
-        messagingTemplate.setDefaultDestination(new QueueMessageChannel(sqsAsync, awsProps.getMessagingChannel()));
+        messagingTemplate.setDefaultDestination(new QueueMessageChannel(sqsClient(), awsProps.getSqs().getMessagingChannel()));
         return messagingTemplate;
     }
 }

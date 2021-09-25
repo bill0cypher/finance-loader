@@ -53,7 +53,8 @@ public class FinanceTasksExecutor {
                 Notification.NoticeStatus.COMPLETED,
                 Notification.NoticeType.INFO,
                 LocalDate.now(),
-                LocalDate.now())).collectList().subscribe(notifications -> publisher.sendMany(notifications, "info"));
+                LocalDate.now())).collectList().subscribe(publisher::sendMany);
+        displayTopOrganizations();
     }
 
     private List<Institution> getGlobalFinancesInfo() {
@@ -97,7 +98,7 @@ public class FinanceTasksExecutor {
                                             Notification.NoticeStatus.NEW,
                                             Notification.NoticeType.ERROR,
                                             LocalDate.now(),
-                                            LocalDate.now()), "error");
+                                            LocalDate.now()));
                                     return new TooManyRequestsException(retrySignal.failure().getMessage());
                                 }))
                         .map(stockInfoShortened -> {
@@ -141,5 +142,11 @@ public class FinanceTasksExecutor {
                 .flatMap(this::downloadStockInfo)
                 .ordered((o1, o2) -> (o1.getLastStockInfo().getVolume() != null ? o1.getLastStockInfo().getVolume() : 0)
                         > (o2.getLastStockInfo().getVolume() != null ? o2.getLastStockInfo().getVolume() : -1) ? 1 : 0);
+    }
+
+    public void displayTopOrganizations() {
+        logger.info(String.format("The highest stock: %s \n ||||||||||||||| \n The gr-st change percent %s2: ",
+                highestStockCompanies(),
+                highestChangePercentCompanies()));
     }
 }
