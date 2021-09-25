@@ -18,5 +18,7 @@ public class AuthListener {
     public void authListener(AuthStatus authStatus) {
         if (authStatus.equals(AuthStatus.AUTHORIZED))
             tasksExecutor.start();
+        else if (authStatus.equals(AuthStatus.FORBIDDEN))
+            tasksExecutor.setShutdown(true);
     }
 }

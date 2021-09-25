@@ -37,6 +37,7 @@ public class FinanceTasksExecutor {
     private final IEXPropsHolder propsHolder;
     private final InstitutionRepository institutionRepository;
     private final NotificationPublisher publisher;
+    private boolean shutdown;
 
     public FinanceTasksExecutor(FinanceLoaderWebClient webClient, IEXPropsHolder propsHolder, InstitutionRepository institutionRepository, NotificationPublisher publisher) {
         this.webClient = webClient;
@@ -49,7 +50,10 @@ public class FinanceTasksExecutor {
         logger.info("Institution's information processing...");
         List<Institution> institutions = getGlobalFinancesInfo();
         institutions = institutions.subList(0, 50);
-        institutionRepository.saveAll(fetchCompaniesStockInfo(institutions)).doOnComplete(this::start).map(institution -> new Notification(
+        institutionRepository.saveAll(fetchCompaniesStockInfo(institutions)).doOnComplete(() -> {
+            if (!shutdown)
+                start();
+        }).map(institution -> new Notification(
                 Notification.NoticeStatus.COMPLETED,
                 Notification.NoticeType.INFO,
                 LocalDate.now(),
@@ -148,5 +152,9 @@ public class FinanceTasksExecutor {
         logger.info(String.format("The highest stock: %s \n ||||||||||||||| \n The gr-st change percent %s2: ",
                 highestStockCompanies(),
                 highestChangePercentCompanies()));
+    }
+
+    public void setShutdown(boolean shutdown) {
+        this.shutdown = shutdown;
     }
 }
