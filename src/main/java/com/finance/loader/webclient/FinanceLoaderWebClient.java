@@ -36,10 +36,6 @@ public class FinanceLoaderWebClient {
         return ConnectionProvider.builder("elastic")
                 .pendingAcquireMaxCount(5000)
                 .maxConnections(5000)
-                .maxIdleTime(Duration.ofSeconds(20))
-                .maxLifeTime(Duration.ofSeconds(60))
-                .pendingAcquireTimeout(Duration.ofSeconds(60))
-                .evictInBackground(Duration.ofSeconds(120))
                 .build();
     }
     private HttpClient createHttpClient() {
