@@ -1,27 +1,23 @@
 package com.finance.loader.tasks;
 
-import com.finance.loader.dto.Notification;
-import org.springframework.cloud.aws.messaging.core.NotificationMessagingTemplate;
-import org.springframework.cloud.aws.messaging.core.QueueMessageChannel;
+import com.finance.loader.dto.NotificationDTO;
+import lombok.RequiredArgsConstructor;
 import org.springframework.cloud.aws.messaging.core.QueueMessagingTemplate;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.List;
 
 @Configuration
+@RequiredArgsConstructor
 public class NotificationPublisher {
 
     private final QueueMessagingTemplate queueMessagingTemplate;
 
-    public NotificationPublisher(QueueMessagingTemplate queueMessagingTemplate) {
-        this.queueMessagingTemplate = queueMessagingTemplate;
-    }
-
-    public void send(Notification message) {
+    public void sendNotification(NotificationDTO message) {
         queueMessagingTemplate.convertAndSend(message);
     }
 
-    public void sendMany(List<Notification> messages) {
+    public void sendNotifications(List<NotificationDTO> messages) {
         queueMessagingTemplate.convertAndSend(messages);
     }
 }

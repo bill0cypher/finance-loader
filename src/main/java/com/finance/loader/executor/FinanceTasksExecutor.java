@@ -1,17 +1,18 @@
 
 package com.finance.loader.executor;
 
-import com.finance.loader.dto.Notification;
+import com.finance.loader.component.AppProperties;
+import com.finance.loader.dto.NotificationDTO;
 import com.finance.loader.exceptions.TooManyRequestsException;
 import com.finance.loader.model.Institution;
 import com.finance.loader.model.StockInfoShortened;
-import com.finance.loader.props.IEXPropsHolder;
 import com.finance.loader.repo.InstitutionRepository;
 import com.finance.loader.tasks.NotificationPublisher;
-import com.finance.loader.webclient.FinanceLoaderWebClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -30,56 +31,50 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Component
+@RequiredArgsConstructor
+@Slf4j
+@EnableScheduling
 public class FinanceTasksExecutor {
-
-    private final Logger logger = LoggerFactory.getLogger(FinanceTasksExecutor.class.getName());
-    private final FinanceLoaderWebClient webClient;
-    private final IEXPropsHolder propsHolder;
+    private final WebClient webClient;
+    private final AppProperties appProperties;
     private final InstitutionRepository institutionRepository;
     private final NotificationPublisher publisher;
 
-    public FinanceTasksExecutor(FinanceLoaderWebClient webClient, IEXPropsHolder propsHolder, InstitutionRepository institutionRepository, NotificationPublisher publisher) {
-        this.webClient = webClient;
-        this.propsHolder = propsHolder;
-        this.institutionRepository = institutionRepository;
-        this.publisher = publisher;
-    }
-
+    @Scheduled(cron = "0 * * * * *")
     public void start() {
-        logger.info("Institution's information processing...");
+        log.info("Institution's information processing...");
         List<Institution> institutions = getGlobalFinancesInfo();
         institutions = institutions.subList(0, 50);
         institutionRepository.saveAll(fetchCompaniesStockInfo(institutions))
-                .doOnComplete(this::start)
-                .map(institution -> new Notification(
-                        Notification.NoticeStatus.COMPLETED,
-                        Notification.NoticeType.INFO,
+                .map(institution -> new NotificationDTO(
+                        NotificationDTO.NoticeStatus.NEW,
+                        NotificationDTO.NoticeType.INFO,
                         LocalDate.now(),
                         LocalDate.now()))
-                .collectList().subscribe(publisher::sendMany);
+                .collectList().subscribe(publisher::sendNotifications);
         displayTopOrganizations();
     }
 
     private List<Institution> getGlobalFinancesInfo() {
-        logger.debug("REST request to get all institutions.");
-        WebClient.ResponseSpec responseSpec = webClient.getPreparedClient().get().uri(uriBuilder -> uriBuilder
+        log.debug("REST request to get all institutions.");
+        WebClient.ResponseSpec responseSpec = webClient.get().uri(uriBuilder -> uriBuilder
                         .pathSegment("/stable/ref-data/symbols")
-                        .queryParam("token", propsHolder.getApiToken()).build())
+                        .queryParam("token", appProperties.getIexApiToken()).build())
                 .retrieve();
         List<Institution> institutions = responseSpec.bodyToFlux(Institution.class).collectList().block();
         if (institutions != null) {
-            logger.info(String.format("Institutions received %d.", institutions.size()));
+            log.info("Institutions received {}.", institutions.size());
             return institutions;
         }
         return Collections.emptyList();
     }
 
     public WebClient.RequestHeadersSpec<?> prepareReceiveCompanyInfoReq(String stock) {
-        logger.debug(String.format("Prepare REST request to receive single institution info by stock %s", stock));
-        return webClient.getPreparedClient().get()
+        log.debug("Prepare REST request to receive single institution info by stock {}", stock);
+        return webClient.get()
                 .uri(uriBuilder -> uriBuilder
                         .pathSegment("/stable/stock/".concat(stock.concat("/quote")))
-                        .queryParam("token", propsHolder.getApiToken())
+                        .queryParam("token", appProperties.getIexApiToken())
                         .build());
     }
 
@@ -88,7 +83,7 @@ public class FinanceTasksExecutor {
                 prepareReceiveCompanyInfoReq(institution.getSymbol())
                         .exchangeToMono(clientResponse -> {
                             if (clientResponse.statusCode().is4xxClientError())
-                                logger.debug("Stock loading failed. The reason is " + clientResponse.statusCode().getReasonPhrase() + ". " + institution.getSymbol());
+                                log.debug("Stock loading failed. The reason is " + clientResponse.statusCode().getReasonPhrase() + ". " + institution.getSymbol());
                             Mono<StockInfoShortened> res = Mono.empty();
                             if (clientResponse.headers().contentType().isPresent() && MediaType.APPLICATION_JSON_VALUE.contains(clientResponse.headers().contentType().get().getSubtype()))
                                 res = clientResponse.bodyToMono(StockInfoShortened.class);
@@ -97,9 +92,9 @@ public class FinanceTasksExecutor {
                         .retryWhen(Retry.backoff(5, Duration.of(1000, ChronoUnit.MILLIS))
                                 .filter(error -> error instanceof WebClientResponseException.TooManyRequests || error instanceof WebClientRequestException)
                                 .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
-                                    publisher.send(new Notification(
-                                            Notification.NoticeStatus.NEW,
-                                            Notification.NoticeType.ERROR,
+                                    publisher.sendNotification(new NotificationDTO(
+                                            NotificationDTO.NoticeStatus.NEW,
+                                            NotificationDTO.NoticeType.ERROR,
                                             LocalDate.now(),
                                             LocalDate.now()));
                                     return new TooManyRequestsException(retrySignal.failure().getMessage());
@@ -119,10 +114,7 @@ public class FinanceTasksExecutor {
                         return o1.getLastStockInfo().getVolume() < o2.getLastStockInfo().getVolume() ? 1 : 0;
                     return 1;
                 })
-                .collect(Collectors.toList()).subList(0, 5)).orElseThrow(() -> {
-            logger.error("Empty list for print provided");
-            throw new NullPointerException("Empty list provided");
-        });
+                .collect(Collectors.toList()).subList(0, 5)).orElse(Collections.emptyList());
     }
 
     public List<Institution> highestChangePercentCompanies() {
@@ -132,10 +124,7 @@ public class FinanceTasksExecutor {
                         return o1.getLastStockInfo().getChangePercent() < o2.getLastStockInfo().getChangePercent() ? 1 : 0;
                     return 1;
                 })
-                .collect(Collectors.toList()).subList(0, 5)).orElseThrow(() -> {
-            logger.error("Empty list for print provided");
-            throw new NullPointerException("Empty list provided");
-        });
+                .collect(Collectors.toList()).subList(0, 5)).orElse(Collections.emptyList());
     }
 
     public Flux<Institution> fetchCompaniesStockInfo(List<Institution> institutions) {
@@ -148,8 +137,6 @@ public class FinanceTasksExecutor {
     }
 
     public void displayTopOrganizations() {
-        logger.info(String.format("The highest stock: %s \n ||||||||||||||| \n The gr-st change percent %s2: ",
-                highestStockCompanies(),
-                highestChangePercentCompanies()));
+        log.info("The highest stock: {} \n ||||||||||||||| \n The gr-st change percent {}2: ", highestStockCompanies(), highestChangePercentCompanies());
     }
 }
